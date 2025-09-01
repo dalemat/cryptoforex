@@ -5,9 +5,7 @@ namespace CryptoForex\GroupManager\Console;
 use Flarum\Console\AbstractCommand;
 use Flarum\User\User;
 use Illuminate\Database\ConnectionInterface;
-use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Console\Output\OutputInterface;
 
 class GroupManagerCommand extends AbstractCommand
 {
@@ -43,22 +41,22 @@ class GroupManagerCommand extends AbstractCommand
     /**
      * {@inheritdoc}
      */
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function fire()
     {
         // Get options
-        $isStatsOnly = $input->getOption('stats');
-        $isDryRun = $input->getOption('dry-run');
-        $isVerbose = $input->getOption('verbose');
+        $isStatsOnly = $this->option('stats');
+        $isDryRun = $this->option('dry-run');
+        $isVerbose = $this->option('verbose');
 
         if ($isStatsOnly) {
-            $this->showStatistics($output);
+            $this->showStatistics();
             return 0;
         }
 
-        $output->writeln('<info>🚀 GROUP MANAGER - ' . ($isDryRun ? 'DRY RUN MODE' : 'Processing Changes') . '</info>');
+        $this->info('🚀 GROUP MANAGER - ' . ($isDryRun ? 'DRY RUN MODE' : 'Processing Changes'));
         
         if ($isDryRun) {
-            $output->writeln('<comment>🧪 DRY RUN MODE - No changes will be made</comment>');
+            $this->comment('🧪 DRY RUN MODE - No changes will be made');
         }
 
         try {
@@ -68,27 +66,30 @@ class GroupManagerCommand extends AbstractCommand
             $totalChanges = count($promotionCandidates) + count($demotionCandidates);
 
             if ($totalChanges === 0) {
-                $output->writeln('<info>✅ No changes needed - all users are in correct groups!</info>');
+                $this->info('✅ No changes needed - all users are in correct groups!');
                 return 0;
             }
 
             if ($isDryRun || $isVerbose) {
-                $this->previewChanges($promotionCandidates, $demotionCandidates, $output, $isVerbose);
+                $this->previewChanges($promotionCandidates, $demotionCandidates, $isVerbose);
             }
 
             if (!$isDryRun) {
-                $this->applyChanges($promotionCandidates, $demotionCandidates, $output);
-                $output->writeln("<info>✅ Successfully processed {$totalChanges} user group changes!</info>");
+                $this->applyChanges($promotionCandidates, $demotionCandidates);
+                $this->info("✅ Successfully processed {$totalChanges} user group changes!");
             }
 
             return 0;
 
         } catch (\Exception $e) {
-            $output->writeln('<error>❌ Error: ' . $e->getMessage() . '</error>');
+            $this->error('❌ Error: ' . $e->getMessage());
             return 1;
         }
     }
 
+    /**
+     * Find users eligible for promotion to VIP group
+     */
     private function findPromotionCandidates()
     {
         return User::where('money', '>=', $this->promotionAmount)
@@ -101,6 +102,9 @@ class GroupManagerCommand extends AbstractCommand
             ->get();
     }
 
+    /**
+     * Find VIP users who should be demoted
+     */
     private function findDemotionCandidates()
     {
         return User::where('money', '<', $this->demotionAmount)
@@ -113,7 +117,10 @@ class GroupManagerCommand extends AbstractCommand
             ->get();
     }
 
-    private function showStatistics(OutputInterface $output)
+    /**
+     * Display current statistics
+     */
+    private function showStatistics()
     {
         $totalUsers = User::count();
         $vipUsers = $this->db->table('group_user')
@@ -123,50 +130,84 @@ class GroupManagerCommand extends AbstractCommand
         $promotionCandidates = count($this->findPromotionCandidates());
         $demotionCandidates = count($this->findDemotionCandidates());
 
-        $output->writeln('<info>📊 GROUP MANAGER STATISTICS</info>');
-        $output->writeln("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        $output->writeln("👥 Total Users: {$totalUsers}");
-        $output->writeln("⭐ Current VIP Users: {$vipUsers}");
-        $output->writeln("💰 Promotion Threshold: \${$this->promotionAmount}");
-        $output->writeln("📉 Demotion Threshold: \${$this->demotionAmount}");
-        $output->writeln("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        $output->writeln("🔼 Users Eligible for VIP: {$promotionCandidates}");
-        $output->writeln("🔽 Users to Remove from VIP: {$demotionCandidates}");
-        $output->writeln("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // Users with money >= promotion amount
+        $richUsers = User::where('money', '>=', $this->promotionAmount)->count();
+        $poorUsers = User::where('money', '<', $this->demotionAmount)->count();
+        
+        // Average balance calculation
+        $avgBalance = User::avg('money') ?? 0;
+
+        $this->info('📊 GROUP MANAGER STATISTICS');
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->line("👥 Total Users: {$totalUsers}");
+        $this->line("⭐ Current VIP Users: {$vipUsers}");
+        $this->line("💰 Average Balance: $" . number_format($avgBalance, 2));
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->line("📈 Promotion Threshold: \${$this->promotionAmount}");
+        $this->line("📉 Demotion Threshold: \${$this->demotionAmount}");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->line("💎 Users with ≥\${$this->promotionAmount}: {$richUsers}");
+        $this->line("📉 Users with <\${$this->demotionAmount}: {$poorUsers}");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->info("🔼 Users Eligible for VIP Promotion: {$promotionCandidates}");
+        $this->comment("🔽 VIP Users to be Demoted: {$demotionCandidates}");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        if ($promotionCandidates > 0 || $demotionCandidates > 0) {
+            $this->line("");
+            $this->comment("💡 Run with --dry-run to see what would change");
+            $this->comment("💡 Run without --dry-run to apply changes");
+        } else {
+            $this->info("✅ All users are in their correct groups!");
+        }
     }
 
-    private function previewChanges($promotions, $demotions, OutputInterface $output, $verbose = false)
+    /**
+     * Preview changes that would be made
+     */
+    private function previewChanges($promotions, $demotions, $verbose = false)
     {
+        $this->line("");
+        
         if (count($promotions) > 0) {
-            $output->writeln('<info>🔼 PROMOTIONS TO VIP GROUP:</info>');
+            $this->info('🔼 PROMOTIONS TO VIP GROUP:');
             
             if ($verbose) {
                 foreach ($promotions as $user) {
                     $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $output->writeln("   • {$user->username} (\${$money}) → Adding to VIP Group");
+                    $this->line("   • {$user->username} (\${$money}) → Adding to VIP Group");
                 }
             } else {
-                $output->writeln("   • " . count($promotions) . " users will be added to VIP");
+                $this->line("   • " . count($promotions) . " users will be added to VIP");
             }
+            $this->line("");
         }
 
         if (count($demotions) > 0) {
-            $output->writeln('<comment>🔽 DEMOTIONS FROM VIP GROUP:</comment>');
+            $this->comment('🔽 DEMOTIONS FROM VIP GROUP:');
             
             if ($verbose) {
                 foreach ($demotions as $user) {
                     $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $output->writeln("   • {$user->username} (\${$money}) → Removing from VIP Group");
+                    $this->line("   • {$user->username} (\${$money}) → Removing from VIP Group");
                 }
             } else {
-                $output->writeln("   • " . count($demotions) . " users will be removed from VIP");
+                $this->line("   • " . count($demotions) . " users will be removed from VIP");
             }
+            $this->line("");
         }
     }
 
-    private function applyChanges($promotions, $demotions, OutputInterface $output)
+    /**
+     * Apply the group changes to database
+     */
+    private function applyChanges($promotions, $demotions)
     {
-        $this->db->transaction(function() use ($promotions, $demotions, $output) {
+        $promotionCount = 0;
+        $demotionCount = 0;
+
+        $this->db->transaction(function() use ($promotions, $demotions, &$promotionCount, &$demotionCount) {
+            
             // Apply promotions
             foreach ($promotions as $user) {
                 $exists = $this->db->table('group_user')
@@ -177,14 +218,18 @@ class GroupManagerCommand extends AbstractCommand
                 if (!$exists) {
                     $this->db->table('group_user')->insert([
                         'user_id' => $user->id,
-                        'group_id' => $this->promotionGroupId
+                        'group_id' => $this->promotionGroupId,
+                        'created_at' => now(),
+                        'updated_at' => now()
                     ]);
                     
-                    $output->writeln("✅ {$user->username} promoted to VIP Group");
+                    $promotionCount++;
+                    $money = $user->money ? number_format($user->money, 2) : '0.00';
+                    $this->info("✅ {$user->username} (\${$money}) promoted to VIP Group");
                 }
             }
 
-            // Apply demotions
+            // Apply demotions  
             foreach ($demotions as $user) {
                 $deleted = $this->db->table('group_user')
                     ->where('user_id', $user->id)
@@ -192,9 +237,20 @@ class GroupManagerCommand extends AbstractCommand
                     ->delete();
                     
                 if ($deleted > 0) {
-                    $output->writeln("✅ {$user->username} removed from VIP Group");
+                    $demotionCount++;
+                    $money = $user->money ? number_format($user->money, 2) : '0.00';
+                    $this->comment("✅ {$user->username} (\${$money}) removed from VIP Group");
                 }
             }
         });
+
+        // Summary
+        $this->line("");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->info("📊 SUMMARY:");
+        $this->line("🔼 Users promoted to VIP: {$promotionCount}");
+        $this->line("🔽 Users demoted from VIP: {$demotionCount}");
+        $this->line("📈 Total changes applied: " . ($promotionCount + $demotionCount));
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 }
