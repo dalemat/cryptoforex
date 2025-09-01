@@ -5,199 +5,178 @@ namespace CryptoForex\GroupManager\Console;
 use Flarum\Console\AbstractCommand;
 use Flarum\User\User;
 use Illuminate\Database\ConnectionInterface;
-use Illuminate\Contracts\Container\Container;
 use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
 
 class GroupManagerCommand extends AbstractCommand
 {
-    protected $signature = 'group:manage';
+    protected $signature = 'group:manage {--stats : Show statistics only} {--dry-run : Show what would be changed without making changes} {--verbose : Show detailed output}';
     protected $description = 'Manage user groups based on balance';
 
     private $db;
-    private $container;
+    private $promotionGroupId = 5;    // VIP Group ID
+    private $demotionGroupId = 3;     // Basic Group ID  
+    private $promotionAmount = 500;   // $500 minimum for VIP
+    private $demotionAmount = 100;    // Below $100 = lose VIP
 
-    public function __construct(ConnectionInterface $db, Container $container)
+    public function __construct(ConnectionInterface $db)
     {
         parent::__construct();
         $this->db = $db;
-        $this->container = $container;
     }
 
-    protected function configure()
+    // ✅ FIXED: Correct method signature for Flarum
+    protected function fire()
     {
-        $this
-            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be changed without making changes')
-            ->addOption('stats', null, InputOption::VALUE_NONE, 'Show statistics only')
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Verbose output');
-    }
+        $isStatsOnly = $this->option('stats');
+        $isDryRun = $this->option('dry-run');
+        $isVerbose = $this->option('verbose');
 
-    protected function fire(InputInterface $input, OutputInterface $output)
-    {
-        $isDryRun = $input->getOption('dry-run');
-        $showStats = $input->getOption('stats');
-        $verbose = $input->getOption('verbose');
+        if ($isStatsOnly) {
+            $this->showStatistics();
+            return 0;
+        }
 
-        // Configuration (you can modify these values)
-        $promotionGroupId = 4;      // VIP group
-        $demotionGroupId = 3;       // Regular group
-        $promotionAmount = 10000.00; // $10,000
-        $demotionAmount = 5000.00;   // $5,000
-
-        $output->writeln("🚀 <info>Flarum Group Manager Started</info>");
-        $output->writeln("💰 Promotion threshold: $" . number_format($promotionAmount));
-        $output->writeln("⬇️  Demotion threshold: $" . number_format($demotionAmount));
+        $this->info('🚀 GROUP MANAGER - ' . ($isDryRun ? 'DRY RUN MODE' : 'Processing Changes'));
         
         if ($isDryRun) {
-            $output->writeln("🧪 <comment>DRY RUN MODE - No changes will be made</comment>");
+            $this->warn('🧪 DRY RUN MODE - No changes will be made');
         }
 
         try {
-            if ($showStats) {
-                $this->showStats($output, $promotionAmount, $demotionAmount, $promotionGroupId, $demotionGroupId);
+            // Find users who should be promoted
+            $promotionCandidates = $this->findPromotionCandidates();
+            
+            // Find users who should be demoted  
+            $demotionCandidates = $this->findDemotionCandidates();
+
+            $totalChanges = count($promotionCandidates) + count($demotionCandidates);
+
+            if ($totalChanges === 0) {
+                $this->info('✅ No changes needed - all users are in correct groups');
                 return 0;
             }
 
-            $promotionCount = $this->processPromotions($promotionAmount, $promotionGroupId, $demotionGroupId, $isDryRun, $output, $verbose);
-            $demotionCount = $this->processDemotions($demotionAmount, $promotionGroupId, $demotionGroupId, $isDryRun, $output, $verbose);
+            // Show what will be changed
+            $this->showChanges($promotionCandidates, $demotionCandidates, $isVerbose);
 
-            $output->writeln("");
-            $output->writeln("✅ <info>Process completed successfully!</info>");
-            $output->writeln("📊 Promotions: {$promotionCount}");
-            $output->writeln("📊 Demotions: {$demotionCount}");
+            if (!$isDryRun) {
+                // Apply changes
+                $this->applyChanges($promotionCandidates, $demotionCandidates);
+                $this->info("✅ Successfully processed {$totalChanges} changes");
+            } else {
+                $this->info("✅ Would process {$totalChanges} total changes");
+            }
 
         } catch (\Exception $e) {
-            $output->writeln("<error>❌ Error: " . $e->getMessage() . "</error>");
+            $this->error('❌ Error: ' . $e->getMessage());
             return 1;
         }
 
         return 0;
     }
 
-    private function processPromotions(float $promotionAmount, int $promotionGroupId, int $demotionGroupId, bool $isDryRun, OutputInterface $output, bool $verbose): int
+    private function showStatistics()
     {
-        // Find users eligible for promotion
-        $users = $this->db->table('users')
-            ->leftJoin('group_user', function($join) use ($promotionGroupId) {
-                $join->on('users.id', '=', 'group_user.user_id')
-                     ->where('group_user.group_id', '=', $promotionGroupId);
-            })
-            ->where('users.money', '>=', $promotionAmount)
-            ->whereNull('group_user.user_id') // Not already in promotion group
-            ->select('users.id', 'users.username', 'users.email', 'users.money')
-            ->get();
+        $this->info('💰 Current Balance Thresholds:');
+        $this->line("   Promotion: $" . number_format($this->promotionAmount, 2));  
+        $this->line("   Demotion: $" . number_format($this->demotionAmount, 2));
+        $this->line('');
 
-        $count = 0;
-        foreach ($users as $user) {
-            if ($verbose) {
-                $output->writeln("⬆️  Promoting: {$user->username} (Balance: $" . number_format($user->money, 2) . ")");
-            }
-
-            if (!$isDryRun) {
-                // Remove from demotion group if exists
-                $this->db->table('group_user')
-                    ->where('user_id', $user->id)
-                    ->where('group_id', $demotionGroupId)
-                    ->delete();
-
-                // Add to promotion group
-                $this->db->table('group_user')->insert([
-                    'user_id' => $user->id,
-                    'group_id' => $promotionGroupId
-                ]);
-            }
-            $count++;
-        }
-
-        if ($count > 0) {
-            $output->writeln("⬆️  <info>Processed {$count} promotions</info>");
-        }
-
-        return $count;
-    }
-
-    private function processDemotions(float $demotionAmount, int $promotionGroupId, int $demotionGroupId, bool $isDryRun, OutputInterface $output, bool $verbose): int
-    {
-        // Find users eligible for demotion
-        $users = $this->db->table('users')
-            ->join('group_user', 'users.id', '=', 'group_user.user_id')
-            ->where('users.money', '<', $demotionAmount)
-            ->where('group_user.group_id', $promotionGroupId)
-            ->select('users.id', 'users.username', 'users.email', 'users.money')
-            ->get();
-
-        $count = 0;
-        foreach ($users as $user) {
-            if ($verbose) {
-                $output->writeln("⬇️  Demoting: {$user->username} (Balance: $" . number_format($user->money, 2) . ")");
-            }
-
-            if (!$isDryRun) {
-                // Remove from promotion group
-                $this->db->table('group_user')
-                    ->where('user_id', $user->id)
-                    ->where('group_id', $promotionGroupId)
-                    ->delete();
-
-                // Add to demotion group
-                $this->db->table('group_user')->insert([
-                    'user_id' => $user->id,
-                    'group_id' => $demotionGroupId
-                ]);
-            }
-            $count++;
-        }
-
-        if ($count > 0) {
-            $output->writeln("⬇️  <info>Processed {$count} demotions</info>");
-        }
-
-        return $count;
-    }
-
-    private function showStats(OutputInterface $output, float $promotionAmount, float $demotionAmount, int $promotionGroupId, int $demotionGroupId)
-    {
-        $output->writeln("📊 <info>Group Manager Statistics</info>");
-        $output->writeln("=====================================");
-
-        // Total users
-        $totalUsers = $this->db->table('users')->count();
-        $output->writeln("👥 Total Users: {$totalUsers}");
-
-        // Users by balance ranges
-        $highBalance = $this->db->table('users')->where('money', '>=', $promotionAmount)->count();
-        $mediumBalance = $this->db->table('users')->where('money', '>=', $demotionAmount)->where('money', '<', $promotionAmount)->count();
-        $lowBalance = $this->db->table('users')->where('money', '<', $demotionAmount)->count();
-
-        $output->writeln("💰 High Balance (≥$" . number_format($promotionAmount) . "): {$highBalance}");
-        $output->writeln("💰 Medium Balance ($" . number_format($demotionAmount) . "-$" . number_format($promotionAmount-0.01) . "): {$mediumBalance}");
-        $output->writeln("💰 Low Balance (<$" . number_format($demotionAmount) . "): {$lowBalance}");
-
-        // Current group memberships
-        $promotionGroupMembers = $this->db->table('group_user')->where('group_id', $promotionGroupId)->count();
-        $demotionGroupMembers = $this->db->table('group_user')->where('group_id', $demotionGroupId)->count();
-
-        $output->writeln("👑 Promotion Group Members: {$promotionGroupMembers}");
-        $output->writeln("👤 Demotion Group Members: {$demotionGroupMembers}");
-
-        // Eligible for changes
-        $eligiblePromotion = $this->db->table('users')
-            ->leftJoin('group_user', function($join) use ($promotionGroupId) {
-                $join->on('users.id', '=', 'group_user.user_id')
-                     ->where('group_user.group_id', '=', $promotionGroupId);
-            })
-            ->where('users.money', '>=', $promotionAmount)
-            ->whereNull('group_user.user_id')
+        // Count current group members
+        $vipCount = $this->db->table('group_user')
+            ->where('group_id', $this->promotionGroupId)
+            ->count();
+            
+        $basicCount = $this->db->table('group_user')
+            ->where('group_id', $this->demotionGroupId)  
             ->count();
 
-        $eligibleDemotion = $this->db->table('users')
-            ->join('group_user', 'users.id', '=', 'group_user.user_id')
-            ->where('users.money', '<', $demotionAmount)
-            ->where('group_user.group_id', $promotionGroupId)
-            ->count();
+        // Count eligible for changes
+        $promotionEligible = count($this->findPromotionCandidates());
+        $demotionEligible = count($this->findDemotionCandidates());
 
-        $output->writeln("⬆️  Eligible for Promotion: {$eligiblePromotion}");
-        $output->writeln("⬇️  Eligible for Demotion: {$eligibleDemotion}");
+        $this->info("👑 VIP Group Members: {$vipCount}");
+        $this->info("👤 Basic Group Members: {$basicCount}");
+        $this->info("⬆️  Eligible for Promotion: {$promotionEligible}");
+        $this->info("⬇️  Eligible for Demotion: {$demotionEligible}");
+    }
+
+    private function findPromotionCandidates()
+    {
+        return $this->db->table('users')
+            ->select('users.id', 'users.username', 'users.money')
+            ->leftJoin('group_user', function($join) {
+                $join->on('users.id', '=', 'group_user.user_id')
+                     ->where('group_user.group_id', '=', $this->promotionGroupId);
+            })
+            ->whereNull('group_user.user_id') // Not already in VIP group
+            ->where('users.money', '>=', $this->promotionAmount)
+            ->get()
+            ->toArray();
+    }
+
+    private function findDemotionCandidates()
+    {
+        return $this->db->table('users')
+            ->select('users.id', 'users.username', 'users.money')
+            ->join('group_user', function($join) {
+                $join->on('users.id', '=', 'group_user.user_id')
+                     ->where('group_user.group_id', '=', $this->promotionGroupId);
+            })
+            ->where('users.money', '<', $this->demotionAmount)
+            ->get()
+            ->toArray();
+    }
+
+    private function showChanges($promotions, $demotions, $verbose)
+    {
+        if (count($promotions) > 0) {
+            $this->info('👑 PROMOTIONS (' . count($promotions) . ' users):');
+            foreach ($promotions as $user) {
+                if ($verbose) {
+                    $this->line("   • User: {$user->username} (Balance: $" . number_format($user->money, 2) . ") → Adding to VIP Group");
+                }
+            }
+            if (!$verbose && count($promotions) > 0) {
+                $this->line("   • " . count($promotions) . " users will be promoted to VIP");
+            }
+        }
+
+        if (count($demotions) > 0) {
+            $this->info('👤 DEMOTIONS (' . count($demotions) . ' users):');
+            foreach ($demotions as $user) {
+                if ($verbose) {
+                    $this->line("   • User: {$user->username} (Balance: $" . number_format($user->money, 2) . ") → Removing from VIP Group");
+                }
+            }
+            if (!$verbose && count($demotions) > 0) {
+                $this->line("   • " . count($demotions) . " users will be removed from VIP");
+            }
+        }
+    }
+
+    private function applyChanges($promotions, $demotions)
+    {
+        $this->db->transaction(function() use ($promotions, $demotions) {
+            // Apply promotions
+            foreach ($promotions as $user) {
+                $this->db->table('group_user')->insert([
+                    'user_id' => $user->id,
+                    'group_id' => $this->promotionGroupId
+                ]);
+                
+                $this->info("✅ User: {$user->username} (ID: {$user->id}) promoted to VIP Group");
+            }
+
+            // Apply demotions  
+            foreach ($demotions as $user) {
+                $this->db->table('group_user')
+                    ->where('user_id', $user->id)
+                    ->where('group_id', $this->promotionGroupId)
+                    ->delete();
+                    
+                $this->info("✅ User: {$user->username} (ID: {$user->id}) removed from VIP Group");
+            }
+        });
     }
 }
