@@ -1,0 +1,38 @@
+{
+    "name": "cryptoforex/group-manager",
+    "description": "Automatic user group management based on balance",
+    "type": "flarum-extension",
+    "keywords": [
+        "flarum",
+        "extension",
+        "groups",
+        "balance",
+        "automation"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "CryptoForex",
+            "email": "admin@cryptoforex.space"
+        }
+    ],
+    "require": {
+        "flarum/core": "^1.0"
+    },
+    "extra": {
+        "flarum-extension": {
+            "title": "Group Manager",
+            "category": "feature",
+            "icon": {
+                "name": "fas fa-users-cog",
+                "backgroundColor": "#e74c3c",
+                "color": "#fff"
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "CryptoForex\\GroupManager\\": "src/"
+        }
+    }
+}
