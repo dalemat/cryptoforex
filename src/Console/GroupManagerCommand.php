@@ -15,8 +15,8 @@ class GroupManagerCommand extends AbstractCommand
     
     private $promotionGroupId = 5;    // VIP Group ID
     private $demotionGroupId = 3;     // Basic Group ID  
-    private $promotionAmount = 50000;   // $500 minimum for VIP
-    private $demotionAmount = 50000;    // Below $100 = lose VIP
+    private $promotionAmount = 500;   // $500 minimum for VIP
+    private $demotionAmount = 500;    // Below $100 = lose VIP
 
     public function __construct(ConnectionInterface $database)
     {
