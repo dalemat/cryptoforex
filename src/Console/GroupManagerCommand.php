@@ -3,7 +3,6 @@
 namespace CryptoForex\GroupManager\Console;
 
 use Flarum\Console\AbstractCommand;
-use Flarum\User\User;
 use Illuminate\Database\ConnectionInterface;
 use Symfony\Component\Console\Input\InputOption;
 
@@ -12,16 +11,16 @@ class GroupManagerCommand extends AbstractCommand
     /**
      * @var ConnectionInterface
      */
-    private $db;
+    protected $database;
     
     private $promotionGroupId = 5;    // VIP Group ID
     private $demotionGroupId = 3;     // Basic Group ID  
     private $promotionAmount = 500;   // $500 minimum for VIP
     private $demotionAmount = 100;    // Below $100 = lose VIP
 
-    public function __construct(ConnectionInterface $db)
+    public function __construct(ConnectionInterface $database)
     {
-        $this->db = $db;
+        $this->database = $database;
         parent::__construct();
     }
 
@@ -43,10 +42,10 @@ class GroupManagerCommand extends AbstractCommand
      */
     protected function fire()
     {
-        // Get options
-        $isStatsOnly = $this->option('stats');
-        $isDryRun = $this->option('dry-run');
-        $isVerbose = $this->option('detailed');
+        // Use Symfony's getInput() method - this is what Flarum's AbstractCommand provides
+        $isStatsOnly = $this->input->getOption('stats');
+        $isDryRun = $this->input->getOption('dry-run');
+        $isDetailed = $this->input->getOption('detailed');
 
         if ($isStatsOnly) {
             $this->showStatistics();
@@ -70,7 +69,7 @@ class GroupManagerCommand extends AbstractCommand
                 return 0;
             }
 
-            if ($isDryRun || $isVerbose) {
+            if ($isDryRun || $isDetailed) {
                 $this->previewChanges($promotionCandidates, $demotionCandidates);
             }
 
@@ -88,7 +87,7 @@ class GroupManagerCommand extends AbstractCommand
 
     private function findPromotionCandidates()
     {
-        return $this->db->table('users')
+        return $this->database->table('users')
             ->leftJoin('group_user', function($join) {
                 $join->on('users.id', '=', 'group_user.user_id')
                      ->where('group_user.group_id', '=', $this->promotionGroupId);
@@ -101,7 +100,7 @@ class GroupManagerCommand extends AbstractCommand
 
     private function findDemotionCandidates()
     {
-        return $this->db->table('users')
+        return $this->database->table('users')
             ->join('group_user', 'users.id', '=', 'group_user.user_id')
             ->where('group_user.group_id', $this->promotionGroupId)
             ->where(function($query) {
@@ -120,23 +119,23 @@ class GroupManagerCommand extends AbstractCommand
         $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         // Current group statistics
-        $vipUsers = $this->db->table('users')
+        $vipUsers = $this->database->table('users')
             ->join('group_user', 'users.id', '=', 'group_user.user_id')
             ->where('group_user.group_id', $this->promotionGroupId)
             ->count();
 
-        $totalUsers = $this->db->table('users')->count();
+        $totalUsers = $this->database->table('users')->count();
         
         $this->line("👥 Total Users: {$totalUsers}");
         $this->line("👑 VIP Users: {$vipUsers}");
         $this->line("📊 VIP Rate: " . round(($vipUsers / max($totalUsers, 1)) * 100, 2) . "%");
         
         // Amount statistics
-        $avgBalance = $this->db->table('users')
+        $avgBalance = $this->database->table('users')
             ->whereNotNull('money')
             ->avg('money');
             
-        $maxBalance = $this->db->table('users')
+        $maxBalance = $this->database->table('users')
             ->whereNotNull('money')
             ->max('money');
 
@@ -197,20 +196,18 @@ class GroupManagerCommand extends AbstractCommand
         $promotionCount = 0;
         $demotionCount = 0;
 
-        $this->db->transaction(function() use ($promotions, $demotions, &$promotionCount, &$demotionCount) {
+        $this->database->transaction(function() use ($promotions, $demotions, &$promotionCount, &$demotionCount) {
             // Apply promotions
             foreach ($promotions as $user) {
-                $exists = $this->db->table('group_user')
+                $exists = $this->database->table('group_user')
                     ->where('user_id', $user->id)
                     ->where('group_id', $this->promotionGroupId)
                     ->exists();
                 
                 if (!$exists) {
-                    $this->db->table('group_user')->insert([
+                    $this->database->table('group_user')->insert([
                         'user_id' => $user->id,
-                        'group_id' => $this->promotionGroupId,
-                        'created_at' => now(),
-                        'updated_at' => now()
+                        'group_id' => $this->promotionGroupId
                     ]);
                     
                     $promotionCount++;
@@ -221,7 +218,7 @@ class GroupManagerCommand extends AbstractCommand
 
             // Apply demotions  
             foreach ($demotions as $user) {
-                $deleted = $this->db->table('group_user')
+                $deleted = $this->database->table('group_user')
                     ->where('user_id', $user->id)
                     ->where('group_id', $this->promotionGroupId)
                     ->delete();
