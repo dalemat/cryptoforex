@@ -35,7 +35,7 @@ class GroupManagerCommand extends AbstractCommand
             ->setDescription('Manage user groups based on balance')
             ->addOption('stats', null, InputOption::VALUE_NONE, 'Show statistics only')
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be changed without making changes')
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Show detailed output');
+            ->addOption('detailed', 'd', InputOption::VALUE_NONE, 'Show detailed output');
     }
 
     /**
@@ -46,7 +46,7 @@ class GroupManagerCommand extends AbstractCommand
         // Get options
         $isStatsOnly = $this->option('stats');
         $isDryRun = $this->option('dry-run');
-        $isVerbose = $this->option('verbose');
+        $isVerbose = $this->option('detailed');
 
         if ($isStatsOnly) {
             $this->showStatistics();
@@ -71,12 +71,11 @@ class GroupManagerCommand extends AbstractCommand
             }
 
             if ($isDryRun || $isVerbose) {
-                $this->previewChanges($promotionCandidates, $demotionCandidates, $isVerbose);
+                $this->previewChanges($promotionCandidates, $demotionCandidates);
             }
 
             if (!$isDryRun) {
                 $this->applyChanges($promotionCandidates, $demotionCandidates);
-                $this->info("✅ Successfully processed {$totalChanges} user group changes!");
             }
 
             return 0;
@@ -87,127 +86,118 @@ class GroupManagerCommand extends AbstractCommand
         }
     }
 
-    /**
-     * Find users eligible for promotion to VIP group
-     */
     private function findPromotionCandidates()
     {
-        return User::where('money', '>=', $this->promotionAmount)
-            ->whereNotExists(function ($query) {
-                $query->select('id')
-                    ->from('group_user')
-                    ->whereRaw('group_user.user_id = users.id')
-                    ->where('group_id', $this->promotionGroupId);
+        return $this->db->table('users')
+            ->leftJoin('group_user', function($join) {
+                $join->on('users.id', '=', 'group_user.user_id')
+                     ->where('group_user.group_id', '=', $this->promotionGroupId);
             })
+            ->where('users.money', '>=', $this->promotionAmount)
+            ->whereNull('group_user.user_id')
+            ->select('users.id', 'users.username', 'users.money')
             ->get();
     }
 
-    /**
-     * Find VIP users who should be demoted
-     */
     private function findDemotionCandidates()
     {
-        return User::where('money', '<', $this->demotionAmount)
-            ->whereExists(function ($query) {
-                $query->select('id')
-                    ->from('group_user')
-                    ->whereRaw('group_user.user_id = users.id')
-                    ->where('group_id', $this->promotionGroupId);
+        return $this->db->table('users')
+            ->join('group_user', 'users.id', '=', 'group_user.user_id')
+            ->where('group_user.group_id', $this->promotionGroupId)
+            ->where(function($query) {
+                $query->where('users.money', '<', $this->demotionAmount)
+                      ->orWhereNull('users.money');
             })
+            ->select('users.id', 'users.username', 'users.money')
             ->get();
     }
 
-    /**
-     * Display current statistics
-     */
     private function showStatistics()
     {
-        $totalUsers = User::count();
-        $vipUsers = $this->db->table('group_user')
-            ->where('group_id', $this->promotionGroupId)
+        $this->line("");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->info("📊 GROUP MANAGER STATISTICS");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        // Current group statistics
+        $vipUsers = $this->db->table('users')
+            ->join('group_user', 'users.id', '=', 'group_user.user_id')
+            ->where('group_user.group_id', $this->promotionGroupId)
             ->count();
 
-        $promotionCandidates = count($this->findPromotionCandidates());
-        $demotionCandidates = count($this->findDemotionCandidates());
-
-        // Users with money >= promotion amount
-        $richUsers = User::where('money', '>=', $this->promotionAmount)->count();
-        $poorUsers = User::where('money', '<', $this->demotionAmount)->count();
+        $totalUsers = $this->db->table('users')->count();
         
-        // Average balance calculation
-        $avgBalance = User::avg('money') ?? 0;
-
-        $this->info('📊 GROUP MANAGER STATISTICS');
-        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         $this->line("👥 Total Users: {$totalUsers}");
-        $this->line("⭐ Current VIP Users: {$vipUsers}");
-        $this->line("💰 Average Balance: $" . number_format($avgBalance, 2));
-        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        $this->line("📈 Promotion Threshold: \${$this->promotionAmount}");
-        $this->line("📉 Demotion Threshold: \${$this->demotionAmount}");
-        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        $this->line("💎 Users with ≥\${$this->promotionAmount}: {$richUsers}");
-        $this->line("📉 Users with <\${$this->demotionAmount}: {$poorUsers}");
-        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        $this->info("🔼 Users Eligible for VIP Promotion: {$promotionCandidates}");
-        $this->comment("🔽 VIP Users to be Demoted: {$demotionCandidates}");
-        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        $this->line("👑 VIP Users: {$vipUsers}");
+        $this->line("📊 VIP Rate: " . round(($vipUsers / max($totalUsers, 1)) * 100, 2) . "%");
         
-        if ($promotionCandidates > 0 || $demotionCandidates > 0) {
-            $this->line("");
-            $this->comment("💡 Run with --dry-run to see what would change");
-            $this->comment("💡 Run without --dry-run to apply changes");
-        } else {
-            $this->info("✅ All users are in their correct groups!");
+        // Amount statistics
+        $avgBalance = $this->db->table('users')
+            ->whereNotNull('money')
+            ->avg('money');
+            
+        $maxBalance = $this->db->table('users')
+            ->whereNotNull('money')
+            ->max('money');
+
+        $this->line("");
+        $this->line("💰 Average Balance: $" . number_format($avgBalance ?? 0, 2));
+        $this->line("🏆 Highest Balance: $" . number_format($maxBalance ?? 0, 2));
+        $this->line("");
+        $this->line("🎯 VIP Threshold: $" . number_format($this->promotionAmount, 2));
+        $this->line("⚠️  Demotion Threshold: $" . number_format($this->demotionAmount, 2));
+
+        // Pending changes
+        $promotionCandidates = $this->findPromotionCandidates();
+        $demotionCandidates = $this->findDemotionCandidates();
+
+        $this->line("");
+        $this->line("🔄 PENDING CHANGES:");
+        $this->line("🔼 Users eligible for VIP: " . count($promotionCandidates));
+        $this->line("🔽 VIP users below threshold: " . count($demotionCandidates));
+        
+        if (count($promotionCandidates) > 0 || count($demotionCandidates) > 0) {
+            $this->comment("");
+            $this->comment("💡 Run 'php flarum group:manage' to apply changes");
+            $this->comment("💡 Run 'php flarum group:manage --dry-run --detailed' to preview changes");
         }
+
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 
-    /**
-     * Preview changes that would be made
-     */
-    private function previewChanges($promotions, $demotions, $verbose = false)
+    private function previewChanges($promotions, $demotions)
     {
         $this->line("");
-        
+        $this->line("🔍 PREVIEW OF CHANGES:");
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━");
+
         if (count($promotions) > 0) {
-            $this->info('🔼 PROMOTIONS TO VIP GROUP:');
-            
-            if ($verbose) {
-                foreach ($promotions as $user) {
-                    $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $this->line("   • {$user->username} (\${$money}) → Adding to VIP Group");
-                }
-            } else {
-                $this->line("   • " . count($promotions) . " users will be added to VIP");
-            }
             $this->line("");
+            $this->info("🔼 PROMOTIONS TO VIP (" . count($promotions) . " users):");
+            foreach ($promotions as $user) {
+                $money = $user->money ? number_format($user->money, 2) : '0.00';
+                $this->line("   → {$user->username} (\${$money})");
+            }
         }
 
         if (count($demotions) > 0) {
-            $this->comment('🔽 DEMOTIONS FROM VIP GROUP:');
-            
-            if ($verbose) {
-                foreach ($demotions as $user) {
-                    $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $this->line("   • {$user->username} (\${$money}) → Removing from VIP Group");
-                }
-            } else {
-                $this->line("   • " . count($demotions) . " users will be removed from VIP");
-            }
             $this->line("");
+            $this->comment("🔽 DEMOTIONS FROM VIP (" . count($demotions) . " users):");
+            foreach ($demotions as $user) {
+                $money = $user->money ? number_format($user->money, 2) : '0.00';
+                $this->line("   → {$user->username} (\${$money})");
+            }
         }
+
+        $this->line("━━━━━━━━━━━━━━━━━━━━━━");
     }
 
-    /**
-     * Apply the group changes to database
-     */
     private function applyChanges($promotions, $demotions)
     {
         $promotionCount = 0;
         $demotionCount = 0;
 
         $this->db->transaction(function() use ($promotions, $demotions, &$promotionCount, &$demotionCount) {
-            
             // Apply promotions
             foreach ($promotions as $user) {
                 $exists = $this->db->table('group_user')
