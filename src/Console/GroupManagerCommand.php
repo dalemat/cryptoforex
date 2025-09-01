@@ -54,7 +54,7 @@ class GroupManagerCommand extends AbstractCommand
         $this->info('GROUP MANAGER - ' . ($isDryRun ? 'DRY RUN MODE' : 'Processing Changes'));
         
         if ($isDryRun) {
-            $this->comment('DRY RUN MODE - No changes will be made');
+            $this->info('DRY RUN MODE - No changes will be made');
         }
 
         try {
@@ -149,8 +149,8 @@ class GroupManagerCommand extends AbstractCommand
         $this->info("VIP users below threshold: " . count($demotionCandidates));
         
         if (count($promotionCandidates) > 0 || count($demotionCandidates) > 0) {
-            $this->comment("Run 'php flarum group:manage' to apply changes");
-            $this->comment("Run 'php flarum group:manage --dry-run --detailed' to preview");
+            $this->info("Run 'php flarum group:manage' to apply changes");
+            $this->info("Run 'php flarum group:manage --dry-run --detailed' to preview");
         }
     }
 
@@ -167,10 +167,10 @@ class GroupManagerCommand extends AbstractCommand
         }
 
         if (count($demotions) > 0) {
-            $this->comment("DEMOTIONS FROM VIP (" . count($demotions) . " users):");
+            $this->info("DEMOTIONS FROM VIP (" . count($demotions) . " users):");
             foreach ($demotions as $user) {
                 $money = $user->money ? number_format($user->money, 2) : '0.00';
-                $this->comment("  -> {$user->username} (\${$money})");
+                $this->info("  -> {$user->username} (\${$money})");
             }
         }
     }
@@ -196,7 +196,7 @@ class GroupManagerCommand extends AbstractCommand
                     
                     $promotionCount++;
                     $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $this->info("{$user->username} (\${$money}) promoted to VIP Group");
+                    $this->info("PROMOTED: {$user->username} (\${$money}) to VIP Group");
                 }
             }
 
@@ -210,7 +210,7 @@ class GroupManagerCommand extends AbstractCommand
                 if ($deleted > 0) {
                     $demotionCount++;
                     $money = $user->money ? number_format($user->money, 2) : '0.00';
-                    $this->comment("{$user->username} (\${$money}) removed from VIP Group");
+                    $this->info("DEMOTED: {$user->username} (\${$money}) from VIP Group");
                 }
             }
         });
